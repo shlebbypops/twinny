@@ -6,6 +6,7 @@ import {
   Range,
   Terminal,
   TextDocument,
+  WebviewView,
   window,
   workspace
 } from 'vscode'
@@ -17,18 +18,23 @@ const execAsync = util.promisify(exec)
 import {
   Theme,
   LanguageType,
-  ApiProviders,
+  apiProviders,
   StreamResponse,
-  StreamRequest,
   PrefixSuffix,
-  Bracket
+  Bracket,
+  ServerMessageKey,
+  Message,
+  ChunkOptions,
+  ServerMessage
 } from '../common/types'
 import { supportedLanguages } from '../common/languages'
 import {
   ALL_BRACKETS,
   CLOSING_BRACKETS,
+  EVENT_NAME,
   LINE_BREAK_REGEX,
   MULTILINE_TYPES,
+  NORMALIZE_REGEX,
   OPENING_BRACKETS,
   QUOTES,
   QUOTES_REGEX,
@@ -37,6 +43,7 @@ import {
 } from '../common/constants'
 import { Logger } from '../common/logger'
 import { SyntaxNode } from 'web-tree-sitter'
+import { getParser } from './parser-utils'
 
 const logger = new Logger()
 
@@ -301,17 +308,17 @@ export const getTheme = () => {
 
 export const getChatDataFromProvider = (
   provider: string,
-  data: StreamResponse | undefined
+  data: StreamResponse
 ) => {
   switch (provider) {
-    case ApiProviders.Ollama:
-    case ApiProviders.OpenWebUI:
+    case apiProviders.Ollama:
+    case apiProviders.OpenWebUI:
       return data?.choices[0].delta?.content
         ? data?.choices[0].delta.content
         : ''
-    case ApiProviders.LlamaCpp:
+    case apiProviders.LlamaCpp:
       return data?.content
-    case ApiProviders.LiteLLM:
+    case apiProviders.LiteLLM:
     default:
       if (data?.choices[0].delta.content === 'undefined') return ''
       return data?.choices[0].delta?.content
@@ -325,12 +332,12 @@ export const getFimDataFromProvider = (
   data: StreamResponse | undefined
 ) => {
   switch (provider) {
-    case ApiProviders.Ollama:
-    case ApiProviders.OpenWebUI:
+    case apiProviders.Ollama:
+    case apiProviders.OpenWebUI:
       return data?.response
-    case ApiProviders.LlamaCpp:
+    case apiProviders.LlamaCpp:
       return data?.content
-    case ApiProviders.LiteLLM:
+    case apiProviders.LiteLLM:
       return data?.choices[0].delta.content
     default:
       if (!data?.choices.length) return
@@ -368,6 +375,24 @@ export function safeParseJsonResponse(
       return JSON.parse(stringBuffer.split('data:')[1])
     }
     return JSON.parse(stringBuffer)
+  } catch (e) {
+    return undefined
+  }
+}
+
+export function safeParseJsonStringBuffer(
+  stringBuffer: string
+): unknown | undefined {
+  try {
+    return JSON.parse(stringBuffer.replace(NORMALIZE_REGEX, ''))
+  } catch (e) {
+    return undefined
+  }
+}
+
+export function safeParseJson<T>(data: string): T | undefined {
+  try {
+    return JSON.parse(data)
   } catch (e) {
     return undefined
   }
@@ -412,6 +437,13 @@ export const getTerminalExists = (): boolean => {
   return true
 }
 
+export function createSymmetryMessage<T>(
+  key: ServerMessageKey,
+  data?: T
+): string {
+  return JSON.stringify({ key, data })
+}
+
 export const getSanitizedCommitMessage = (commitMessage: string) => {
   const sanitizedMessage = commitMessage
     .replace(QUOTES_REGEX, '')
@@ -421,13 +453,148 @@ export const getSanitizedCommitMessage = (commitMessage: string) => {
   return `git commit -m "${sanitizedMessage}"`
 }
 
-export const logStreamOptions = (opts: StreamRequest) => {
+export const getNormalisedText = (text: string) =>
+  text.replace(NORMALIZE_REGEX, ' ')
+
+function getSplitChunks(node: SyntaxNode, options: ChunkOptions): string[] {
+  const { minSize = 50, maxSize = 500 } = options
+  const chunks: string[] = []
+
+  function traverse(node: SyntaxNode) {
+    if (node.text.length <= maxSize && node.text.length >= minSize) {
+      chunks.push(node.text)
+    } else if (node.children.length > 0) {
+      for (const child of node.children) {
+        traverse(child)
+      }
+    } else if (node.text.length > maxSize) {
+      let start = 0
+      while (start < node.text.length) {
+        const end = Math.min(start + maxSize, node.text.length)
+        chunks.push(node.text.slice(start, end))
+        start = end
+      }
+    }
+  }
+
+  traverse(node)
+  return chunks
+}
+
+export async function getDocumentSplitChunks(
+  content: string,
+  filePath: string,
+  options: ChunkOptions = {}
+): Promise<string[]> {
+  const { minSize = 50, maxSize = 500, overlap = 50 } = options
+
+  try {
+    const parser = await getParser(filePath)
+
+    if (!parser) {
+      return simpleChunk(content, { minSize, maxSize, overlap })
+    }
+
+    const tree = parser.parse(content)
+    const chunks = getSplitChunks(tree.rootNode, { minSize, maxSize })
+
+    return combineChunks(chunks, { minSize, maxSize, overlap })
+  } catch (error) {
+    console.error(`Error parsing file ${filePath}: ${error}`)
+    return simpleChunk(content, { minSize, maxSize, overlap })
+  }
+}
+
+function combineChunks(chunks: string[], options: ChunkOptions): string[] {
+  const { minSize = 50, maxSize = 500, overlap = 50 } = options
+  const result: string[] = []
+  let currentChunk = ''
+
+  for (const chunk of chunks) {
+    if (currentChunk.length + chunk.length > maxSize) {
+      if (currentChunk.length >= minSize) {
+        result.push(currentChunk)
+        currentChunk = chunk
+      } else {
+        currentChunk += ' ' + chunk
+      }
+    } else {
+      currentChunk += (currentChunk ? ' ' : '') + chunk
+    }
+    if (currentChunk.length >= maxSize - overlap) {
+      result.push(currentChunk)
+      currentChunk = currentChunk.slice(-overlap)
+    }
+  }
+
+  if (currentChunk.length >= minSize) {
+    result.push(currentChunk)
+  }
+
+  return result
+}
+
+function simpleChunk(content: string, options: ChunkOptions): string[] {
+  const { minSize = 50, maxSize = 500, overlap = 50 } = options
+  const chunks: string[] = []
+  let start = 0
+
+  while (start < content.length) {
+    const end = Math.min(start + maxSize, content.length)
+    const chunk = content.slice(start, end)
+
+    try {
+      chunks.push(chunk)
+    } catch (error) {
+      if (
+        error instanceof RangeError &&
+        error.message.includes('Invalid array length')
+      ) {
+        logger.log(
+          'Maximum array size reached. Returning chunks processed so far.'
+        )
+        break
+      } else {
+        throw error
+      }
+    }
+
+    start = end - overlap > start ? end - overlap : end
+
+    if (end === content.length) break
+  }
+
+  return chunks.filter(
+    (chunk, index) => chunk.length >= minSize || index === chunks.length - 1
+  )
+}
+
+export const updateLoadingMessage = (
+  view: WebviewView | undefined,
+  message: string
+) => {
+  view?.webview.postMessage({
+    type: EVENT_NAME.twinnySendLoader,
+    value: {
+      data: message
+    }
+  } as ServerMessage<string>)
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const logStreamOptions = (opts: any) => {
   logger.log(
     `
 ***Twinny Stream Debug***\n\
 Streaming response from ${opts.options.hostname}:${opts.options.port}.\n\
 Request body:\n${JSON.stringify(opts.body, null, 2)}\n\n
 Request options:\n${JSON.stringify(opts.options, null, 2)}\n\n
+Number characters in all messages = ${opts.body.messages?.reduce(
+      (acc: number, msg: Message) => {
+        return msg.content?.length ? acc + msg.content?.length : 0
+      },
+      0
+    )}\n\n
     `
   )
 }

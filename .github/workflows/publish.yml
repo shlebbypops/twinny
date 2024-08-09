@@ -1,26 +1,73 @@
+name: Publish Extension
+
 on:
   workflow_dispatch:
   push:
     branches:
       - main
 
-name: Publish Extension
 jobs:
-  deploy:
-    runs-on: ubuntu-latest
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win32
+            arch: x64
+          - os: ubuntu-latest
+            platform: linux
+            arch: x64
+          - os: ubuntu-latest
+            platform: linux
+            arch: arm64
+          - os: macos-latest
+            platform: darwin
+            arch: x64
+          - os: macos-latest
+            platform: darwin
+            arch: arm64
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v2
       - uses: actions/setup-node@v1
         with:
           node-version: 18
       - run: npm ci
-      - name: Publish to Open VSX Registry
-        uses: HaaLeo/publish-vscode-extension@v1
-        id: publishToOpenVSX
+      - name: Package Extension
+        env:
+          npm_config_arch: ${{ matrix.arch }}
+        run: npx vsce package --target ${{ matrix.platform }}-${{ matrix.arch }}
+      - name: Upload artifact
+        uses: actions/upload-artifact@v2
         with:
-          pat: ${{ secrets.OPEN_VSX_TOKEN }}
+          name: vsix-${{ matrix.platform }}-${{ matrix.arch }}
+          path: "*.vsix"
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-node@v1
+        with:
+          node-version: 18
+      - name: Download all artifacts
+        uses: actions/download-artifact@v2
+        with:
+          path: ./vsix
       - name: Publish to Visual Studio Marketplace
-        uses: HaaLeo/publish-vscode-extension@v1
-        with:
-          pat: ${{ secrets.VS_CODE_MARKETPLACE_TOKEN }}
-          registryUrl: https://marketplace.visualstudio.com
+        env:
+          VSCE_PAT: ${{ secrets.VS_CODE_MARKETPLACE_TOKEN }}
+        run: |
+          for file in ./vsix/**/*.vsix; do
+            echo "Publishing $file to Visual Studio Marketplace"
+            npx vsce publish --pat "$VSCE_PAT" --packagePath "$file"
+          done
+      - name: Publish to Open VSX Registry
+        env:
+          OVSX_PAT: ${{ secrets.OPEN_VSX_TOKEN }}
+        run: |
+          for file in ./vsix/**/*.vsix; do
+            echo "Publishing $file to Open VSX Registry"
+            npx ovsx publish -p "$OVSX_PAT" --packagePath "$file"
+          done

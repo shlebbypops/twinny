@@ -1,25 +1,26 @@
 import { USER } from '../common/constants'
 import {
   Message,
-  ApiProviders,
-  StreamBodyBase,
+  RequestBodyBase,
+  apiProviders,
   StreamBodyOpenAI,
-  StreamOptionsOllama
+  RequestOptionsOllama
 } from '../common/types'
 
 export function createStreamRequestBody(
   provider: string,
   options: {
+
     temperature: number
     numPredictChat: number
     model: string
     messages?: Message[]
     keepAlive?: string | number
   }
-): StreamBodyBase | StreamOptionsOllama | StreamBodyOpenAI {
+): RequestBodyBase | RequestOptionsOllama | StreamBodyOpenAI {
   switch (provider) {
-    case ApiProviders.Ollama:
-    case ApiProviders.OpenWebUI:
+    case apiProviders.Ollama:
+    case apiProviders.OpenWebUI:
       return {
         model: options.model,
         stream: true,
@@ -32,7 +33,7 @@ export function createStreamRequestBody(
           num_predict: options.numPredictChat
         }
       }
-    case ApiProviders.LiteLLM:
+    case apiProviders.LiteLLM:
     default:
       return {
         model: options.model,
@@ -53,10 +54,10 @@ export function createStreamRequestBodyFim(
     model: string
     keepAlive?: string | number
   }
-): StreamBodyBase | StreamOptionsOllama | StreamBodyOpenAI {
+): RequestBodyBase | RequestOptionsOllama | StreamBodyOpenAI {
   switch (provider) {
-    case ApiProviders.Ollama:
-    case ApiProviders.OpenWebUI:
+    case apiProviders.Ollama:
+    case apiProviders.OpenWebUI:
       return {
         model: options.model,
         prompt,
@@ -69,7 +70,7 @@ export function createStreamRequestBodyFim(
           num_predict: options.numPredictFim
         }
       }
-    case ApiProviders.LMStudio:
+    case apiProviders.LMStudio:
       return {
         model: options.model,
         prompt,
@@ -77,15 +78,15 @@ export function createStreamRequestBodyFim(
         temperature: options.temperature,
         n_predict: options.numPredictFim
       }
-    case ApiProviders.LlamaCpp:
-    case ApiProviders.Oobabooga:
+    case apiProviders.LlamaCpp:
+    case apiProviders.Oobabooga:
       return {
         prompt,
         stream: true,
         temperature: options.temperature,
         n_predict: options.numPredictFim
       }
-    case ApiProviders.LiteLLM:
+    case apiProviders.LiteLLM:
       return {
         messages: [{ content: prompt, role: USER }],
         model: options.model,

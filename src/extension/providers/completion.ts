@@ -164,12 +164,7 @@ export class CompletionProvider implements InlineCompletionItemProvider {
     this._nonce = this._nonce + 1
     this._statusBar.text = '$(loading~spin)'
     this._statusBar.command = 'twinny.stopGeneration'
-
-    this._parser = await getParser(document.uri.fsPath)
-    this._nodeAtPosition = getNodeAtPosition(
-      this._parser?.parse(this._document?.getText()),
-      this._position
-    )
+    await this.tryParseDocument(document)
 
     this._isMultilineCompletion = getIsMultilineCompletion({
       node: this._nodeAtPosition,
@@ -196,7 +191,7 @@ export class CompletionProvider implements InlineCompletionItemProvider {
               onEnd: () => this.onEnd(resolve),
               onError: this.onError,
               onData: (data) => {
-                const completion = this.onData(data)
+                const completion = this.onData(data as StreamResponse)
                 if (completion) {
                   this._abortController?.abort()
                 }
@@ -209,6 +204,24 @@ export class CompletionProvider implements InlineCompletionItemProvider {
         })
       }, this._debounceWait)
     })
+  }
+
+  private async tryParseDocument (document: TextDocument) {
+    try {
+      if (!this._position || !this._document) return
+      const parser = await getParser(document.uri.fsPath)
+
+      if (!parser || !parser.parse) return
+
+      this._parser = parser
+
+      this._nodeAtPosition = getNodeAtPosition(
+        this._parser?.parse(this._document.getText()),
+        this._position
+      )
+    } catch (e) {
+      return
+    }
   }
 
   private buildStreamRequest(prompt: string, provider: TwinnyProvider) {
@@ -443,7 +456,7 @@ export class CompletionProvider implements InlineCompletionItemProvider {
         await this._templateProvider.readSystemMessageTemplate('fim-system.hbs')
 
       const fimTemplate =
-        await this._templateProvider.renderTemplate<FimTemplateData>('fim', {
+        await this._templateProvider.readTemplate<FimTemplateData>('fim', {
           prefix: prefixSuffix.prefix,
           suffix: prefixSuffix.suffix,
           systemMessage,

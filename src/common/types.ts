@@ -1,14 +1,14 @@
 import { InlineCompletionItem, InlineCompletionList } from 'vscode'
 import { CodeLanguageDetails } from './languages'
-import { ALL_BRACKETS } from './constants'
+import { ALL_BRACKETS, SYMMETRY_DATA_MESSAGE } from './constants'
 
-export interface StreamBodyBase {
+export interface RequestBodyBase {
   stream: boolean
   n_predict?: number
   temperature?: number
 }
 
-export interface StreamOptionsOllama extends StreamBodyBase {
+export interface RequestOptionsOllama extends RequestBodyBase {
   model: string
   keep_alive?: string | number
   messages?: Message[] | Message
@@ -16,7 +16,7 @@ export interface StreamOptionsOllama extends StreamBodyBase {
   options: Record<string, unknown>
 }
 
-export interface StreamBodyOpenAI extends StreamBodyBase {
+export interface StreamBodyOpenAI extends RequestBodyBase {
   messages?: Message[] | Message
   max_tokens: number
 }
@@ -31,6 +31,9 @@ export interface StreamResponse {
   created_at: string
   response: string
   content: string
+  message: {
+    content: string
+  }
   done: boolean
   context: number[]
   total_duration: number
@@ -39,6 +42,7 @@ export interface StreamResponse {
   prompt_eval_duration: number
   eval_count: number
   eval_duration: number
+  type? : string
   choices: [
     {
       text: string
@@ -95,10 +99,11 @@ export interface DefaultTemplate {
 }
 
 export interface TemplateData extends Record<string, string | undefined> {
-  systemMessage?: string
   code: string
-  language: string
+  systemMessage?: string
+  language?: string
 }
+
 export interface FimTemplateData extends Record<string, string | undefined> {
   context: string
   fileName: string
@@ -141,19 +146,19 @@ export interface StreamRequestOptions {
 }
 
 export interface StreamRequest {
-  body: StreamBodyBase | StreamBodyOpenAI
+  body: RequestBodyBase | StreamBodyOpenAI
   options: StreamRequestOptions
   onEnd?: () => void
   onStart?: (controller: AbortController) => void
   onError?: (error: Error) => void
-  onData: (streamResponse: StreamResponse | undefined) => void
+  onData: <T = StreamResponse>(streamResponse:  T) => void
 }
 
 export interface UiTabs {
   [key: string]: JSX.Element
 }
 
-export const ApiProviders = {
+export const apiProviders = {
   LiteLLM: 'litellm',
   LlamaCpp: 'llamacpp',
   LMStudio: 'lmstudio',
@@ -208,5 +213,51 @@ export interface InferenceProvider {
   apiProtocol?: string
   modelName?: string
   name: string
-  type: (typeof ApiProviders)[keyof typeof ApiProviders]
+  type: (typeof apiProviders)[keyof typeof apiProviders]
+}
+
+export interface Peer {
+  publicKey: Buffer;
+  write: (value: string) => boolean;
+  on: (key: string, cb: (data: Buffer) => void) => void;
+  once: (key: string, cb: (data: Buffer) => void) => void;
+  writable: boolean;
+  key: string;
+  discovery_key: string;
+}
+
+export interface SymmetryMessage<T> {
+  key: string;
+  data: T;
+}
+
+export type ServerMessageKey = keyof typeof SYMMETRY_DATA_MESSAGE;
+
+export interface SymmetryConnection {
+  sessionToken?: string
+  discoveryKey?: string
+  modelName?: string
+  name: string;
+  provider: string;
+  id: string;
+}
+export interface InferenceRequest {
+  key: string;
+  messages: Message[];
+}
+
+export interface ChunkOptions {
+  minSize?: number
+  maxSize?: number
+  overlap?: number
+}
+
+export type Embedding = {
+  embedding: number[]
+}
+
+export type EmbeddedDocument = {
+  content: string
+  vector: number[] | undefined
+  file: string
 }
